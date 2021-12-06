@@ -55,64 +55,98 @@ fn routine_label(d: &Graph) -> Vec<usize> {
     label
 }
 
-fn routine_partition(i: usize, edges_leaving_level: &mut Vec<Vec<(usize, usize)>>, j: &mut usize, node_by_label: &mut Vec<usize>, label: &mut Vec<usize>, nodes_in_level: &Vec<Vec<usize>>, _lin_label: &Vec<usize>, rev_lin_label: &Vec<usize>){
+fn routine_partition(
+    // What levl are we currently labelling?
+	i: usize,
+    // (Written-to) The EDGES stacks from the paper
+    // An ordered stack of edges leaving [level].
+    // Order: Largest destination node lex label on top
+	edges_leaving_level: &mut Vec<Vec<(usize, usize)>>,
+    // (Written-to) How many labels have been assigned? (Also: What is the next label to be assigned)
+	j: &mut usize,
+    // (Written-to) What is the node with the given [lexicographical label]?
+	node_by_label: &mut Vec<usize>,
+    // (Written-to) What is the lexicographical label of [node]?
+	label: &mut Vec<usize>,
+    // What nodes are inside [level]?
+	nodes_in_level: &Vec<Vec<usize>>,
+    // What linear label was assigned to [node]?
+	_lin_label: &Vec<usize>,
+	// What node has [linear label]?
+	rev_lin_label: &Vec<usize>
+){
     // NOTE: All edges in EDGES have a source node in level i
     // NOTE: For each pair of edges, let y and z be the destination nodes.
     //     y will be higher to the top of the stack than z if L(y) > L(z).
     // - - - - - -
-    struct Succ{
+
+    // In the paper, these are referred to as "Tree Successors" and "Auxillery Nodes"
+    struct Group{
         nodes: Vec<usize>,
         low_label: usize,
         temp_list: Vec<usize>,
     }
 
     let num_nodes_in_level_i = nodes_in_level[i].len();
-    // used to remove elements from Succ::nodes in constant time.
+    // used to remove elements from Group::nodes in constant time.
     let mut position_in_group_deck = vec![usize::MAX; num_nodes_in_level_i];
 
     // %#%- 1.
-    let mut all_succ = vec![Succ{low_label: *j, temp_list: Vec::new(), nodes: Vec::new() }];
-    let mut succ = vec![usize::MAX; num_nodes_in_level_i];
+    let mut groups = vec![Group{low_label: *j, temp_list: Vec::new(), nodes: Vec::new() }];
+    let mut assigned_group = vec![usize::MAX; num_nodes_in_level_i];
     for &node in &nodes_in_level[i] {
         let w = 0;
-        position_in_group_deck[rev_lin_label[node]-*j] = all_succ[w].nodes.len();
-        all_succ[w].nodes.push(node);
-        succ[rev_lin_label[node]-*j] = w;
+        position_in_group_deck[rev_lin_label[node]-*j] = groups[w].nodes.len();
+        groups[w].nodes.push(node);
+        assigned_group[rev_lin_label[node]-*j] = w;
     }
 
     // %#%- 2.
     let elli = &mut edges_leaving_level[i];
     while let Some(&(_, y)) = elli.last() {
         // used for 2.1.2.
+        // The set of group id's whose temp lists contains some members,
+        //  that will form a new group.
         let mut touched_temp_lists = Vec::new();
         // %#%- 2.1.
         // %#%- 2.1.1.
         while let Some(&(x, y2)) = elli.last() {
             // %#%- 2.1.1.1.
             if y != y2 { break; }
-            let w = succ[rev_lin_label[x]-*j];
+            let w = assigned_group[rev_lin_label[x]-*j];
             let posdeck = &mut position_in_group_deck[rev_lin_label[x]-*j];
 
-            let &displaced = all_succ[w].nodes.last().unwrap();
-            all_succ[w].nodes[*posdeck] = displaced;
-            all_succ[w].nodes.pop();
-            *posdeck = all_succ[w].temp_list.len();
+            // Move groups[w].nodes[*posdeck] to groups[w].temp_list in constant time
+            // (Both nodes and temp_list are sets of group members,
+            //  and temp_list is going to become a new group soon)
+            let &displaced = groups[w].nodes.last().unwrap();
+            groups[w].nodes[*posdeck] = displaced;
+            groups[w].nodes.pop();
+            *posdeck = groups[w].temp_list.len();
             position_in_group_deck[rev_lin_label[displaced]-*j] = *posdeck;
-            all_succ[w].temp_list.push(x);
+            groups[w].temp_list.push(x);
+
             touched_temp_lists.push(w);
             elli.pop();
         }
 
         // %#%- 2.1.2.
         for w in touched_temp_lists {
-            let v = all_succ.len();
-            let nodes = std::mem::take(&mut all_succ[w].temp_list);
+            let v = groups.len();
+            let nodes = std::mem::take(&mut groups[w].temp_list);
+
+            //--Optimizations that we could make that don't effect running time
+            // This temp_list was already handled in a previous iteration, don't form an empty group.
+            //if nodes.empty() { continue; }
+            // This temp_list contains all the children of this group, reuse this group.
+            //if groups[w].nodes.empty() { groups[w].nodes = nodes; continue; }
+
             for x in &nodes {
-                succ[rev_lin_label[*x]-*j] = v;
+                assigned_group[rev_lin_label[*x]-*j] = v;
             }
-            all_succ.push(Succ{
+            groups.push(Group{
                 nodes,
-                low_label: all_succ[w].low_label + all_succ[w].nodes.len(),
+                low_label: groups[w].low_label + groups[w].nodes.len(),
                 temp_list: Vec::new(),
             });
         }
@@ -120,12 +154,13 @@ fn routine_partition(i: usize, edges_leaving_level: &mut Vec<Vec<(usize, usize)>
 
     // %#%- 3.
     for &x in &nodes_in_level[i] {
-        let s = &mut all_succ[succ[rev_lin_label[x]-*j]];
+        let s = &mut groups[assigned_group[rev_lin_label[x]-*j]];
         label[x] = s.low_label;
         node_by_label[s.low_label] = x;
         s.low_label += 1;
     }
 
+    // we labelled every node in this level
     *j += num_nodes_in_level_i;
 }
 
