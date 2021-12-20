@@ -399,8 +399,7 @@ impl From<io::Error> for InputError {
 fn determine_node_level(graph: &Graph) -> (Vec<Vec<usize>>, Vec<usize>) {
     let mut level = vec![usize::MAX; graph.nodes.len()];
     let mut nodes_in_level = vec![];
-    let mut explore_queue = VecDeque::new();
-    let mut reverse_queue = VecDeque::new();
+    let mut explore_stack = vec![];
     for node in 0..graph.nodes.len() {
         // skip nodes which have a level assigned
         if level[node] != usize::MAX {
@@ -410,31 +409,39 @@ fn determine_node_level(graph: &Graph) -> (Vec<Vec<usize>>, Vec<usize>) {
         // visit node and its descendants (with indeterminate level) in a
         // pre-order traversal, pushing them onto the reverse_queue for a
         // post-order traversal.
-        explore_queue.push_back(node);
-        while let Some(node) = explore_queue.pop_front() {
+        explore_stack.push(node);
+        while let Some(node) = explore_stack.pop() {
+            // max is the level of this node
+            // before we look at our children, assume we're in level 0.
+            let mut max = 0;
+            let mut exploring = false;
             for &child in &graph.edges[node] {
-                // only explore children with no assigned level
-                if level[child] == usize::MAX {
-                    explore_queue.push_back(child);
+                if exploring {
+                    if level[child] == usize::MAX {
+                        explore_stack.push(child);
+                    }
+                } else {
+                    if level[child] == usize::MAX {
+                        // we haven't visited a child of this node yet.
+                        // visit all unvisited descendants of this node and then revisit this node.
+                        exploring = true;
+                        explore_stack.push(node);
+                        explore_stack.push(child);
+                    } else if level[child] + 1 > max {
+                        // we must be in a larger level than our child.
+                        max = level[child] + 1;
+                    }
                 }
             }
-            reverse_queue.push_back(node);
-        }
-
-        // post order traverse over node and all its children
-        while let Some(node) = reverse_queue.pop_front() {
-            // calculate the level
-            let l: &Vec<_> = &graph.edges[node];
-            let l = l.iter().copied()
-                .map(|child| level[child] + 1)
-                .max()
-                // NOTE: This '0' makes levels start at 0 rather than 1.
-                .unwrap_or(0);
-            level[node] = l;
-            if nodes_in_level.len() <= l {
-                nodes_in_level.resize(l+1, vec![]);
+            if !exploring {
+                // ensure nodes_in_level has a vector for our level.
+                if nodes_in_level.len() <= max {
+                    nodes_in_level.resize(max+1, vec![]);
+                }
+                // insert ourselves in both mappings
+                nodes_in_level[max].push(node);
+                level[node] = max;
             }
-            nodes_in_level[l].push(node);
         }
     }
 
